@@ -1,0 +1,22 @@
+{
+  "name": "rc-debugger",
+  "version": "0.1.0",
+  "description": "Interactive debugger for Reactive Network cross-chain flows",
+  "type": "module",
+  "bin": {
+    "rc-debug": "./bin/rc-debug.js"
+  },
+  "scripts": {
+    "start": "node bin/rc-debug.js watch",
+    "init": "node bin/rc-debug.js init"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "chalk": "^5.3.0",
+    "prompts": "^2.4.2",
+    "viem": "^2.21.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
