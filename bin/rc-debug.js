@@ -20,14 +20,13 @@ if (!command || command === '--help' || command === '-h') {
   Commands:
     init              Interactive setup (or: init --rc 0x... for auto-discovery)
     watch             Launch live TUI dashboard
-    watch --web       Launch web dashboard on port 4040
     watch --log FILE  Log all traces to JSONL file
-    add-flow          Add a custom flow pattern
+    diagnose          Run health checks (config, RPC, balance, debt, subs)
     status            Show config + detected flows summary
     trace --tx HASH   One-off trace of a specific transaction
+    add-flow          Add a custom flow pattern
     share [ID] [FILE] Export a flow trace as shareable HTML
     assert            CI mode — wait for flow, exit 0/1
-    diagnose          Run health checks (config, RPC, balance, debt, subs)
 
   Assert flags:
     --flow NAME       Match flow by name (substring)
@@ -39,9 +38,10 @@ if (!command || command === '--help' || command === '-h') {
 
   Examples:
     rc-debug init --rc 0xABC...
-    rc-debug watch --web --log traces.jsonl
+    rc-debug diagnose
+    rc-debug watch --log traces.jsonl
     rc-debug assert --flow Greet --timeout 30 --json
-    rc-debug share flow-0:0x123 trace.html
+    rc-debug trace --tx 0x123...
 `);
   process.exit(0);
 }

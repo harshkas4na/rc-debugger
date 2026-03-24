@@ -1,8 +1,6 @@
 // Main watch command — launch the interactive TUI dashboard
 // Supports:
 //   --log <file>  JSON trace persistence (JSONL)
-//   --web         Launch web dashboard instead of TUI (port 4040)
-//   --port <N>    Custom web server port
 
 import { loadConfig, validateConfig } from '../lib/config.js';
 import { detectFlows } from '../analysis/flow-detector.js';
@@ -13,6 +11,7 @@ import { FlowLogger } from '../monitor/logger.js';
 import { FlowStore } from '../monitor/store.js';
 import { HookRunner } from '../monitor/hooks.js';
 import { fetchSubscriptions } from '../analysis/subscription.js';
+import { quickDiagnose } from './diagnose.js';
 
 export default async function watch(args) {
   const config = loadConfig();
@@ -30,10 +29,30 @@ export default async function watch(args) {
 
   // Parse flags
   const logFile = getFlag(args, '--log');
-  const webMode = args?.includes('--web');
-  const webPort = parseInt(getFlag(args, '--port') || '4040');
 
-  console.log('\n  \x1b[36m\x1b[1mRC Debugger\x1b[0m \u2014 Analyzing...\n');
+  console.log('\n  \x1b[1mRC Debugger\x1b[0m \u2014 Pre-flight checks...\n');
+
+  // ─── Pre-flight diagnostics ──────────────────────────────
+  try {
+    const checks = await quickDiagnose(config);
+    let hasBlocker = false;
+    for (const r of checks) {
+      const sym = r.status === 'pass' ? '\x1b[32mv\x1b[0m' :
+                  r.status === 'warn' ? '\x1b[33m!\x1b[0m' :
+                  '\x1b[31mx\x1b[0m';
+      console.log(`  ${sym} ${r.detail}`);
+      if (r.status === 'fail') hasBlocker = true;
+    }
+    console.log('');
+    if (hasBlocker) {
+      console.log('  \x1b[31mPre-flight checks failed.\x1b[0m Run \x1b[1mrc-debug diagnose\x1b[0m for full details.');
+      console.log('  Starting anyway...\n');
+    }
+  } catch {
+    // Pre-flight is best-effort — don't block on failure
+  }
+
+  console.log('  \x1b[90mAnalyzing flows...\x1b[0m\n');
 
   let detection;
   try {
@@ -52,7 +71,7 @@ export default async function watch(args) {
 
   // Create all trackers
   const stats = new StatsTracker();
-  const store = new FlowStore();   // Tier 4 #18: persistent storage
+  const store = new FlowStore();
   const hooks = new HookRunner(config.hooks);
   let logger = null;
   if (logFile) {
@@ -70,7 +89,7 @@ export default async function watch(args) {
       if (inst._recorded) continue;
       inst._recorded = true;
       stats.record(inst);
-      store.add(inst);          // Tier 4 #18: persist
+      store.add(inst);
       if (logger) logger.log(inst);
       hooks.onFlowComplete(inst);
     }
@@ -79,24 +98,7 @@ export default async function watch(args) {
   // Start monitoring
   await orchestrator.start();
 
-  // ─── Web mode (Tier 4 #19) ─────────────────────────────────
-  if (webMode) {
-    const { WebServer } = await import('../web/server.js');
-    const web = new WebServer(orchestrator, detection, store, stats, webPort);
-    web.start();
-    console.log(`\n  \x1b[32m\x1b[1mWeb dashboard running at http://localhost:${webPort}\x1b[0m`);
-    console.log('  Press Ctrl+C to stop.\n');
-
-    process.on('SIGINT', () => {
-      orchestrator.stop();
-      web.stop();
-      store.stop();
-      process.exit(0);
-    });
-    return;
-  }
-
-  // ─── TUI mode (default) ────────────────────────────────────
+  // ─── TUI dashboard ───────────────────────────────────────
   const dashboard = new Dashboard(config, detection, orchestrator, { stats, logger });
   dashboard.render();
 
@@ -121,8 +123,8 @@ export default async function watch(args) {
         if (added.length > 0 || removed.length > 0) {
           detection.subscriptions = currentSubs;
           const ts = new Date().toLocaleTimeString();
-          if (added.length > 0) dashboard.activityPanel.addItem(`  ${ts}  {green-fg}\u2795 ${added.length} sub(s) added{/green-fg}`);
-          if (removed.length > 0) dashboard.activityPanel.addItem(`  ${ts}  {red-fg}\u2796 ${removed.length} sub(s) removed{/red-fg}`);
+          if (added.length > 0) dashboard.activityPanel.addItem(`  ${ts}  {green-fg}+ ${added.length} sub(s) added{/green-fg}`);
+          if (removed.length > 0) dashboard.activityPanel.addItem(`  ${ts}  {red-fg}- ${removed.length} sub(s) removed{/red-fg}`);
           prevSubIds = currSubIds;
           dashboard.screen.render();
         }
