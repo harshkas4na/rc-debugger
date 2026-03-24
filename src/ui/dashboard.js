@@ -3,8 +3,9 @@
 import blessed from 'blessed';
 import { renderFlowGraph } from './flow-graph.js';
 import { STATE } from '../monitor/flow-state.js';
-import { chainName, chainExplorerTxUrl } from '../lib/chains.js';
+import { chainName, chainExplorerTxUrl, rnChainId, SYSTEM_CONTRACTS } from '../lib/chains.js';
 import { formatArgs } from '../lib/decoder.js';
+import { ethGetBalance, ethCall } from '../lib/rpc.js';
 
 export class Dashboard {
   constructor(config, detection, orchestrator, opts = {}) {
@@ -17,6 +18,11 @@ export class Dashboard {
     this.selectedActivity = 0;
     this.selectedNode = null;
     this.filter = null; // Tier 3 #11: 'all' | 'ok' | 'fail' | 'active'
+
+    // Live contract data (refreshed periodically)
+    this._liveData = { rcBalance: null, rcDebt: null, ccBalance: null, subsStatus: null };
+    this._refreshLiveData();
+    this._liveInterval = setInterval(() => this._refreshLiveData(), 30000);
 
     this._createScreen();
     this._createWidgets();
@@ -32,10 +38,10 @@ export class Dashboard {
   }
 
   _createWidgets() {
-    // ─── Header (2 rows: title + stats) ──────────────────────
+    // ─── Header (4 rows: title + stats + funding + subs) ─────
     this.header = blessed.box({
       parent: this.screen,
-      top: 0, left: 0, width: '100%', height: 3,
+      top: 0, left: 0, width: '100%', height: 5,
       tags: true,
       style: { fg: 'white', bg: 'blue' },
     });
@@ -43,7 +49,7 @@ export class Dashboard {
     // ─── Flow Graph Panel ────────────────────────────────────
     this.flowPanel = blessed.box({
       parent: this.screen,
-      top: 3, left: 0, width: '100%', height: '35%-3',
+      top: 5, left: 0, width: '100%', height: '35%-5',
       border: { type: 'line' }, tags: true,
       scrollable: true, alwaysScroll: true,
       scrollbar: { ch: '\u2588', style: { bg: 'grey' } },
@@ -168,6 +174,32 @@ export class Dashboard {
       this.screen.render();
     });
 
+    // 'd' to run quick diagnostics on current config
+    this._diagnosing = false;
+    this.screen.key(['d'], async () => {
+      if (this._diagnosing) return;
+      this._diagnosing = true;
+      this.detailPanel.setContent('  {yellow-fg}Running diagnostics...{/yellow-fg}');
+      this.screen.render();
+      try {
+        const { quickDiagnose } = await import('../commands/diagnose.js');
+        const results = await quickDiagnose(this.config);
+        const lines = ['  {bold}{cyan-fg}Quick Diagnostics{/cyan-fg}{/bold}', ''];
+        for (const r of results) {
+          const sym = r.status === 'pass' ? '{green-fg}\u2713{/green-fg}' :
+                      r.status === 'warn' ? '{yellow-fg}\u26A0{/yellow-fg}' :
+                      '{red-fg}\u2717{/red-fg}';
+          lines.push(`  ${sym} ${r.detail}`);
+        }
+        if (results.length === 0) lines.push('  {grey-fg}No checks available (missing config){/grey-fg}');
+        this.detailPanel.setContent(lines.join('\n'));
+      } catch (err) {
+        this.detailPanel.setContent(`  {red-fg}Diagnostics error: ${err.message}{/red-fg}`);
+      }
+      this._diagnosing = false;
+      this.screen.render();
+    });
+
     // Track focus changes from mouse clicks too
     for (let i = 0; i < this._panels.length; i++) {
       this._panels[i].on('focus', () => {
@@ -200,6 +232,51 @@ export class Dashboard {
     this.screen.render();
   }
 
+  // ─── Live data refresh (balances, debt, subs) ─────────────
+
+  async _refreshLiveData() {
+    const rnCid = rnChainId(this.config.network);
+    const rcAddr = this.config.contracts.rc?.address;
+    const ccAddr = this.config.contracts.callback?.address;
+    const ccChainId = this.config.contracts.callback?.chainId;
+
+    // RC balance
+    if (rcAddr) {
+      try {
+        const hex = await ethGetBalance(rnCid, rcAddr);
+        this._liveData.rcBalance = Number(BigInt(hex || '0x0')) / 1e18;
+      } catch { /* keep previous value */ }
+
+      // RC debt
+      try {
+        const paddedAddr = rcAddr.slice(2).toLowerCase().padStart(64, '0');
+        const data = '0x2ecd4e7d' + paddedAddr;
+        const result = await ethCall(rnCid, { to: SYSTEM_CONTRACTS.callbackProxy, data }, 'latest');
+        this._liveData.rcDebt = Number(BigInt(result || '0x0')) / 1e18;
+      } catch { /* keep previous value */ }
+    }
+
+    // CC balance
+    if (ccAddr && ccChainId) {
+      try {
+        const hex = await ethGetBalance(ccChainId, ccAddr);
+        this._liveData.ccBalance = Number(BigInt(hex || '0x0')) / 1e18;
+      } catch { /* keep previous value */ }
+    }
+
+    // Subscription count from detection
+    const subs = this.detection.subscriptions || [];
+    const activeSubs = subs.filter(s => !s.isCron && !s.isSystem);
+    const cronSubs = subs.filter(s => s.isCron);
+    this._liveData.subsStatus = { active: activeSubs.length, cron: cronSubs.length, total: subs.length };
+
+    // Re-render header if screen exists
+    if (this.screen) {
+      this._renderHeader();
+      this.screen.render();
+    }
+  }
+
   // ─── Header with stats ─────────────────────────────────────
 
   _renderHeader() {
@@ -218,7 +295,7 @@ export class Dashboard {
       `{cyan-fg}|{/cyan-fg} ${active} active ` +
       `{cyan-fg}|{/cyan-fg} ${healthDot} polling ${this.config.pollInterval / 1000}s`;
 
-    // Tier 2 #7: Stats line
+    // Line 2: Stats
     let line2 = '';
     if (this.stats) {
       const s = this.stats;
@@ -227,7 +304,49 @@ export class Dashboard {
         ` | avg ${s.avgDuration}s | last ${s.timeSinceLastFlow} | up ${s.uptime}{/grey-fg}`;
     }
 
-    this.header.setContent(line1 + '\n' + line2);
+    // Line 3: Funding + Subscriptions
+    let line3 = '';
+    const ld = this._liveData;
+    if (ld.rcBalance !== null || ld.subsStatus) {
+      const parts = [];
+
+      // RC balance
+      if (ld.rcBalance !== null) {
+        const balStr = ld.rcBalance < 0.0001 ? ld.rcBalance.toExponential(1) : ld.rcBalance.toPrecision(4);
+        const balColor = ld.rcBalance === 0 ? 'red' : ld.rcBalance < 0.1 ? 'yellow' : 'green';
+        parts.push(`RC: {${balColor}-fg}${balStr} REACT{/${balColor}-fg}`);
+      }
+
+      // RC debt
+      if (ld.rcDebt !== null && ld.rcDebt > 0) {
+        parts.push(`{red-fg}debt: ${ld.rcDebt.toPrecision(3)} REACT{/red-fg}`);
+      }
+
+      // CC balance
+      if (ld.ccBalance !== null) {
+        const ccChain = chainName(this.config.contracts.callback?.chainId);
+        const ccStr = ld.ccBalance === 0 ? '0' : ld.ccBalance < 0.0001 ? ld.ccBalance.toExponential(1) : ld.ccBalance.toPrecision(4);
+        const ccColor = ld.ccBalance === 0 ? 'yellow' : 'green';
+        parts.push(`CC: {${ccColor}-fg}${ccStr} ETH{/${ccColor}-fg} {grey-fg}(${ccChain}){/grey-fg}`);
+      }
+
+      // Subscriptions
+      if (ld.subsStatus) {
+        const ss = ld.subsStatus;
+        const subParts = [];
+        if (ss.active > 0) subParts.push(`{green-fg}${ss.active} event{/green-fg}`);
+        if (ss.cron > 0) subParts.push(`{magenta-fg}${ss.cron} cron{/magenta-fg}`);
+        if (subParts.length > 0) {
+          parts.push(`subs: ${subParts.join('+')}`);
+        } else {
+          parts.push('{red-fg}subs: none{/red-fg}');
+        }
+      }
+
+      line3 = `  ${parts.join('  {grey-fg}|{/grey-fg}  ')}`;
+    }
+
+    this.header.setContent(line1 + '\n' + line2 + '\n' + line3);
   }
 
   // ─── Flow Graph ────────────────────────────────────────────
@@ -238,7 +357,7 @@ export class Dashboard {
 
     for (const flow of this.detection.flows) {
       const activeInst = activeInstances.find(i => i.flow.id === flow.id);
-      const flowLines = renderFlowGraph(flow, activeInst, this.config);
+      const flowLines = renderFlowGraph(flow, activeInst, this.config, this.detection.subscriptions);
       lines.push(...flowLines, '');
     }
 
@@ -420,6 +539,14 @@ export class Dashboard {
     if (inst.failReason) {
       lines.push('');
       lines.push(`  {red-fg}{bold}Failure:{/bold} ${inst.failReason}{/red-fg}`);
+      if (inst.failHint) {
+        lines.push('');
+        lines.push('  {yellow-fg}{bold}Hints:{/bold}');
+        for (const h of inst.failHint.split('\n')) {
+          lines.push(`  ${h}`);
+        }
+        lines.push('{/yellow-fg}');
+      }
     }
 
     this.detailPanel.setContent(lines.join('\n'));
@@ -495,6 +622,14 @@ export class Dashboard {
     if (inst.failReason) {
       lines.push('');
       lines.push(`  {red-fg}{bold}Failure:{/bold} ${inst.failReason}{/red-fg}`);
+      if (inst.failHint) {
+        lines.push('');
+        lines.push('  {yellow-fg}{bold}Hints:{/bold}');
+        for (const h of inst.failHint.split('\n')) {
+          lines.push(`  ${h}`);
+        }
+        lines.push('{/yellow-fg}');
+      }
     }
 
     this.detailPanel.setContent(lines.join('\n'));
@@ -508,7 +643,7 @@ export class Dashboard {
     const panelNames = ['Flows', 'Activity', 'Details'];
     const focusInfo = ` [{bold}${panelNames[this._panelIdx]}{/bold}]`;
     this.statusBar.setContent(
-      ' {bold}Tab{/bold}:Panel  {bold}\u2191\u2193{/bold}:Scroll  {bold}\u2190\u2192{/bold}:Node  {bold}t{/bold}:Trace  {bold}f{/bold}:Filter  {bold}r{/bold}:Refresh  {bold}q{/bold}:Quit' + filterInfo + logInfo + focusInfo
+      ' {bold}Tab{/bold}:Panel  {bold}\u2191\u2193{/bold}:Scroll  {bold}\u2190\u2192{/bold}:Node  {bold}t{/bold}:Trace  {bold}f{/bold}:Filter  {bold}d{/bold}:Diagnose  {bold}r{/bold}:Refresh  {bold}q{/bold}:Quit' + filterInfo + logInfo + focusInfo
     );
   }
 
@@ -524,6 +659,7 @@ export class Dashboard {
   }
 
   destroy() {
+    if (this._liveInterval) clearInterval(this._liveInterval);
     this.screen.destroy();
   }
 }

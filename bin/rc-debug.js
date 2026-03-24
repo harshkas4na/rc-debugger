@@ -10,6 +10,7 @@ const commands = {
   trace:      () => import('../src/commands/trace.js'),
   share:      () => import('../src/commands/share.js'),
   assert:     () => import('../src/commands/assert.js'),
+  diagnose:   () => import('../src/commands/diagnose.js'),
 };
 
 if (!command || command === '--help' || command === '-h') {
@@ -26,6 +27,7 @@ if (!command || command === '--help' || command === '-h') {
     trace --tx HASH   One-off trace of a specific transaction
     share [ID] [FILE] Export a flow trace as shareable HTML
     assert            CI mode — wait for flow, exit 0/1
+    diagnose          Run health checks (config, RPC, balance, debt, subs)
 
   Assert flags:
     --flow NAME       Match flow by name (substring)

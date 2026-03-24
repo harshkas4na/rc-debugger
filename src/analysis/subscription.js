@@ -33,16 +33,25 @@ export async function resolveRvmId(rcAddress, network) {
 }
 
 /**
- * Fetch all subscriptions for an RVM and classify them
+ * Fetch subscriptions for an RVM and classify them.
+ * If rcAddress is provided, only return subscriptions created by that specific RC contract.
+ * Without rcAddress, returns all subscriptions for the RVM (may include other contracts sharing the same RVM).
  */
-export async function fetchSubscriptions(rvmId, network) {
+export async function fetchSubscriptions(rvmId, network, rcAddress = null) {
   const raw = await rnkGetSubscribers(rvmId, network);
   if (!raw?.length) return [];
 
+  const rcFilter = rcAddress ? rcAddress.toLowerCase() : null;
   const subs = [];
   const seen = new Set();
 
   for (const s of raw) {
+    // Filter to only this RC's subscriptions if address provided
+    if (rcFilter) {
+      const rvmContract = (s.rvmContract || s.rvm_contract || '').toLowerCase();
+      if (rvmContract && rvmContract !== rcFilter) continue;
+    }
+
     const chainId = Number(s.chain_id || s.chainId);
     const contract = (s.contract || s._contract || '').toLowerCase();
     // topics can be: array [topic0, topic1, ...] or separate fields
@@ -61,7 +70,7 @@ export async function fetchSubscriptions(rvmId, network) {
       isCron: !!cronName,
       cronName: cronName || null,
       isSystem,
-      rvmContract: s.rvmContract,
+      rvmContract: (s.rvmContract || s.rvm_contract || '').toLowerCase(),
     });
   }
 

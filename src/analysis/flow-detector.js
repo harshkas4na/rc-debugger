@@ -46,7 +46,7 @@ export async function detectFlows(config, onStatus) {
 
   // 3. Fetch subscriptions
   status('Fetching subscriptions...');
-  result.subscriptions = await fetchSubscriptions(result.rvmId, config.network);
+  result.subscriptions = await fetchSubscriptions(result.rvmId, config.network, rcAddr);
   status(`Found ${result.subscriptions.length} subscription(s)`);
 
   // 4. Discover callback patterns from recent txs

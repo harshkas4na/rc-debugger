@@ -113,7 +113,7 @@ export default async function watch(args) {
 
     setInterval(async () => {
       try {
-        const currentSubs = await fetchSubscriptions(detection.rvmId, config.network);
+        const currentSubs = await fetchSubscriptions(detection.rvmId, config.network, config.contracts.rc?.address);
         const currSubIds = new Set(currentSubs.map(s => `${s.chainId}:${s.contract}:${s.topic0}`));
         const added = [...currSubIds].filter(id => !prevSubIds.has(id));
         const removed = [...prevSubIds].filter(id => !currSubIds.has(id));

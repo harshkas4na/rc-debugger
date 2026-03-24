@@ -17,6 +17,7 @@ import { ethBlockNumber } from '../lib/rpc.js';
 import { rnChainId, chainName, isRnChainId } from '../lib/chains.js';
 import { decodeRevertReason } from '../lib/decoder.js';
 import { CRON_TOPICS } from '../analysis/subscription.js';
+import { diagnoseFailure } from './failure-hints.js';
 
 export class Orchestrator {
   constructor(config, detection) {
@@ -174,6 +175,8 @@ export class Orchestrator {
         }
       }
 
+      const d1 = diagnoseFailure('rcWatch', revertReason, { config: this.config });
+      instance.failHint = d1.hint;
       instance.setFailed('rcWatch', revertReason);
       this.tracker.complete(instance);
       return;
@@ -195,6 +198,8 @@ export class Orchestrator {
         instance.setDestExecuted({ success: true, observationOnly: true });
         this.tracker.complete(instance);
       } else {
+        const d2 = diagnoseFailure('callback', 'No callbacks or logs emitted by RC', { config: this.config });
+        instance.failHint = d2.hint;
         instance.setFailed('callback', 'No callbacks or logs emitted by RC');
         this.tracker.complete(instance);
       }
@@ -234,6 +239,8 @@ export class Orchestrator {
         // Dest callback: watch for execution on dest chain
         hasDestCallback = true;
         this._watchDestCallback(instance, cb).catch(err => {
+          const d3 = diagnoseFailure('dest', err.message, { chainId: cb.chainId, contract: cb.contract, gasLimit: cb.gasLimit, config: this.config });
+          instance.failHint = d3.hint;
           instance.setFailed('dest', err.message);
           this.tracker.complete(instance);
         });
@@ -261,6 +268,8 @@ export class Orchestrator {
         const decoded = decodeRevertReason(rData);
         if (decoded) revertReason = `Self-callback revert: ${decoded}`;
       }
+      const d4 = diagnoseFailure('dest', revertReason, { config: this.config });
+      instance.failHint = d4.hint;
       instance.setFailed('dest', revertReason);
       this.tracker.complete(instance);
       return;
@@ -295,6 +304,8 @@ export class Orchestrator {
           // Finally a dest callback — watch for it
           hasMore = true;
           this._watchDestCallback(instance, cb).catch(err => {
+            const d5 = diagnoseFailure('dest', err.message, { chainId: cb.chainId, contract: cb.contract, config: this.config });
+            instance.failHint = d5.hint;
             instance.setFailed('dest', err.message);
             this.tracker.complete(instance);
           });
@@ -366,9 +377,14 @@ export class Orchestrator {
         }
       }
 
-      instance.setFailed('dest', `Callback not found on ${chainName(cb.chainId)} (~${Math.round(maxAttempts * pollMs / 1000)}s timeout)`);
+      const timeoutMsg = `Callback not found on ${chainName(cb.chainId)} (~${Math.round(maxAttempts * pollMs / 1000)}s timeout)`;
+      const d6 = diagnoseFailure('dest', timeoutMsg, { chainId: cb.chainId, contract: cb.contract, gasLimit: cb.gasLimit, config: this.config });
+      instance.failHint = d6.hint;
+      instance.setFailed('dest', timeoutMsg);
       this.tracker.complete(instance);
     } catch (err) {
+      const d7 = diagnoseFailure('dest', err.message, { chainId: cb.chainId, contract: cb.contract, config: this.config });
+      instance.failHint = d7.hint;
       instance.setFailed('dest', err.message);
       this.tracker.complete(instance);
     }

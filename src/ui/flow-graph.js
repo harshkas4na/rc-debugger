@@ -11,14 +11,24 @@ import { chainName } from '../lib/chains.js';
  *   ● Origin Event  ───▶  ● RC react()  ───▶  ● Callback  ───▶  ● Dest Exec
  *   Sepolia                ReactVM              emit CB           Base Sepolia
  */
-export function renderFlowGraph(flow, activeInstance, config) {
+export function renderFlowGraph(flow, activeInstance, config, subscriptions) {
   const lines = [];
 
-  // Flow title
+  // Flow title with subscription status
   const triggerType = flow.trigger.type === 'cron' ? '{magenta-fg}CRON{/magenta-fg}' :
                       flow.trigger.type === 'feedback' ? '{blue-fg}FEEDBACK{/blue-fg}' :
                       '{cyan-fg}EVENT{/cyan-fg}';
-  lines.push(`  {bold}${flow.name}{/bold}  [${triggerType}]${flow.isCustom ? '  {grey-fg}(custom){/grey-fg}' : ''}`);
+
+  // Check if this flow's trigger topic has an active subscription
+  let subTag = '';
+  if (subscriptions && flow.trigger.topic0) {
+    const hasSub = subscriptions.some(s =>
+      s.topic0?.toLowerCase() === flow.trigger.topic0.toLowerCase()
+    );
+    subTag = hasSub ? '  {green-fg}ACTIVE{/green-fg}' : '  {red-fg}NO SUB{/red-fg}';
+  }
+
+  lines.push(`  {bold}${flow.name}{/bold}  [${triggerType}]${subTag}${flow.isCustom ? '  {grey-fg}(custom){/grey-fg}' : ''}`);
 
   // Node symbols
   const nodes = getNodeStates(activeInstance);

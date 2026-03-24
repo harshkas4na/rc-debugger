@@ -119,3 +119,11 @@ export async function ethGetBlockByNumber(chainId, blockRef = 'latest') {
 export async function ethCall(chainId, tx, blockRef = 'latest') {
   return jsonRpcWithFallback(chainId, 'eth_call', [tx, blockRef]);
 }
+
+export async function ethGetBalance(chainId, address, blockRef = 'latest') {
+  return jsonRpcWithFallback(chainId, 'eth_getBalance', [address, blockRef]);
+}
+
+export async function ethGetCode(chainId, address, blockRef = 'latest') {
+  return jsonRpcWithFallback(chainId, 'eth_getCode', [address, blockRef]);
+}
