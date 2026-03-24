@@ -28,21 +28,20 @@ export function renderFlowGraph(flow, activeInstance, config, subscriptions) {
     subTag = hasSub ? '  {green-fg}ACTIVE{/green-fg}' : '  {red-fg}NO SUB{/red-fg}';
   }
 
-  lines.push(`  {bold}${flow.name}{/bold}  [${triggerType}]${subTag}${flow.isCustom ? '  {grey-fg}(custom){/grey-fg}' : ''}`);
+  lines.push(`  {bold}{white-fg}${flow.name}{/white-fg}{/bold}  {grey-fg}[${triggerType}]{/grey-fg}${subTag}${flow.isCustom ? '  {grey-fg}(custom){/grey-fg}' : ''}`);
 
   // Node symbols
   const nodes = getNodeStates(activeInstance);
-  const arrow = '{grey-fg}\u2500\u2500\u2500\u25B6{/grey-fg}';
+  const arrow = '{grey-fg}\u2500\u2500\u25B6{/grey-fg}';
 
   // Top row: symbols + labels
   const nodeStr = [
-    `${nodeSymbol(nodes[0])} Origin Event`,
-    `${nodeSymbol(nodes[1])} RC react()`,
-    `${nodeSymbol(nodes[2])} Callback`,
-    `${nodeSymbol(nodes[3])} Dest Exec`,
+    `${nodeSymbol(nodes[0])} {grey-fg}Origin{/grey-fg}`,
+    `${nodeSymbol(nodes[1])} {grey-fg}RC react(){/grey-fg}`,
+    `${nodeSymbol(nodes[2])} {grey-fg}Callback{/grey-fg}`,
+    `${nodeSymbol(nodes[3])} {grey-fg}Dest{/grey-fg}`,
   ];
 
-  // Build the connected line
   lines.push(`  ${nodeStr[0]}  ${arrow}  ${nodeStr[1]}  ${arrow}  ${nodeStr[2]}  ${arrow}  ${nodeStr[3]}`);
 
   // Bottom row: chain labels
@@ -50,13 +49,7 @@ export function renderFlowGraph(flow, activeInstance, config, subscriptions) {
   const destChain = flow.callback?.type === 'self' ? 'RC (self)' :
                     flow.callback?.chainId ? chainName(flow.callback.chainId) : '?';
 
-  const labels = [
-    padRight(originChain, 14),
-    padRight('ReactVM', 14),
-    padRight('emit CB', 14),
-    destChain,
-  ];
-  lines.push(`  {grey-fg}${labels[0]}        ${labels[1]}        ${labels[2]}        ${labels[3]}{/grey-fg}`);
+  lines.push(`  {grey-fg}${padRight(originChain, 12)}       ${padRight('ReactVM', 14)}       ${padRight('emit CB', 14)}       ${destChain}{/grey-fg}`);
 
   // Self-callback hops
   if (flow.selfCallbacks?.length > 0) {

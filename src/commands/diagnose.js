@@ -26,9 +26,9 @@ function shortAddr(addr) {
 }
 
 function icon(status) {
-  if (status === 'pass') return chalk.green('\u2713');
-  if (status === 'warn') return chalk.yellow('\u26A0');
-  return chalk.red('\u2717');
+  if (status === 'pass') return chalk.green('v');
+  if (status === 'warn') return chalk.yellow('!');
+  return chalk.red('x');
 }
 
 // ─── Check runner ───────────────────────────────────────────────────────────
@@ -468,16 +468,17 @@ export default async function diagnose() {
     process.exit(1);
   }
 
-  console.log(`\n  ${chalk.cyan.bold('rc-debug diagnose')}\n`);
+  console.log(`\n  ${chalk.bold('rc-debug diagnose')}`);
+  console.log(chalk.grey('  ' + '\u2500'.repeat(50)));
 
   const results = await runAllChecks(config);
 
-  // Print grouped
+  // Print grouped with // section headers
   let currentGroup = null;
   for (const r of results) {
     if (r.group !== currentGroup) {
       currentGroup = r.group;
-      console.log(`\n  ${chalk.bold(r.group)}`);
+      console.log(`\n  ${chalk.grey('//')} ${chalk.bold(r.group.toUpperCase())}`);
     }
     console.log(`    ${icon(r.status)} ${r.detail}`);
   }
@@ -488,7 +489,8 @@ export default async function diagnose() {
   const failed = results.filter(r => r.status === 'fail').length;
 
   console.log('');
-  console.log(`  ${chalk.bold('Summary:')} ${chalk.green(passed + ' passed')}${warned ? ', ' + chalk.yellow(warned + ' warning(s)') : ''}${failed ? ', ' + chalk.red(failed + ' failed') : ''}`);
+  console.log(chalk.grey('  ' + '\u2500'.repeat(50)));
+  console.log(`  ${chalk.green(passed + ' passed')}${warned ? '  ' + chalk.yellow(warned + ' warning(s)') : ''}${failed ? '  ' + chalk.red(failed + ' failed') : ''}`);
   console.log('');
 
   process.exit(failed > 0 ? 1 : 0);
