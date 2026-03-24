@@ -226,26 +226,35 @@ async function runAllChecks(config) {
         }
       }
 
+      // Build contract address → role name map
+      const addrRoles = new Map();
+      for (const [role, c] of Object.entries(config.contracts)) {
+        if (c?.address) addrRoles.set(c.address.toLowerCase(), role);
+      }
+
       const seenTopics = new Map();
       for (const sub of subs) {
         const t = sub.topic0?.toLowerCase() || '';
         const prev = seenTopics.get(t);
         if (prev) { prev.count++; } else {
-          seenTopics.set(t, { count: 1, isCron: sub.isCron, cronName: sub.cronName, topic0: sub.topic0 });
+          seenTopics.set(t, { count: 1, isCron: sub.isCron, cronName: sub.cronName, topic0: sub.topic0, chainId: sub.chainId, contract: sub.contract });
         }
       }
 
       let unknownCount = 0;
       for (const [topic, info] of seenTopics) {
         const countSuffix = info.count > 1 ? ` (${info.count}x)` : '';
+        const chain = chainName(info.chainId);
+        const contractRole = addrRoles.get(info.contract?.toLowerCase());
+        const contractLabel = contractRole ? `${shortAddr(info.contract)} [${contractRole}]` : shortAddr(info.contract);
         if (info.isCron) {
           add('Subscriptions', `topic-${topic.slice(0, 10)}`, 'pass',
-            `${info.topic0?.slice(0, 18)}... \u2192 ${info.cronName} (cron)${countSuffix}`);
+            `ACTIVE  ${info.cronName} (cron)${countSuffix}`);
         } else {
           const known = allTopics.get(topic);
           if (known) {
             add('Subscriptions', `topic-${topic.slice(0, 10)}`, 'pass',
-              `${info.topic0?.slice(0, 18)}... \u2192 ${known.event.name}(${known.event.inputs.map(i => i.type).join(',')}) from ${known.role} ABI${countSuffix}`);
+              `ACTIVE  ${chain}  ${known.event.name}(${known.event.inputs.map(i => i.type).join(',')})  on ${contractLabel}${countSuffix}`);
           } else {
             unknownCount += info.count;
           }

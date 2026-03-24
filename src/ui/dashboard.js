@@ -53,7 +53,7 @@ export class Dashboard {
       border: { type: 'line' }, tags: true,
       scrollable: true, alwaysScroll: true,
       scrollbar: { ch: '\u2588', style: { bg: 'grey' } },
-      label: ' Flows ',
+      label: ' Flows & Subscriptions ',
       keys: true, vi: true, mouse: true,
       style: { border: { fg: 'cyan' }, label: { fg: 'cyan', bold: true } },
     });
@@ -349,20 +349,79 @@ export class Dashboard {
     this.header.setContent(line1 + '\n' + line2 + '\n' + line3);
   }
 
-  // ─── Flow Graph ────────────────────────────────────────────
+  // ─── Flow Graph + Subscriptions ────────────────────────────
 
   _renderFlows() {
     const activeInstances = this.tracker.getActive();
     const lines = [];
 
+    // ── Flows section ──
     for (const flow of this.detection.flows) {
       const activeInst = activeInstances.find(i => i.flow.id === flow.id);
       const flowLines = renderFlowGraph(flow, activeInst, this.config, this.detection.subscriptions);
       lines.push(...flowLines, '');
     }
 
-    if (lines.length === 0) {
+    if (this.detection.flows.length === 0) {
       lines.push('{grey-fg}  No flows detected. Run rc-debug add-flow to add one.{/grey-fg}');
+      lines.push('');
+    }
+
+    // ── Subscriptions section ──
+    const subs = this.detection.subscriptions || [];
+    if (subs.length > 0) {
+      lines.push('  {bold}{underline}Subscriptions{/underline}{/bold}');
+      lines.push('');
+
+      // Build topic → event name map from contracts
+      const topicNames = new Map();
+      const contracts = this.detection.contracts;
+      if (contracts) {
+        for (const role of ['origin', 'callback', 'rc']) {
+          const c = contracts[role];
+          if (c?.topicMap) {
+            for (const [topic, ev] of c.topicMap) {
+              topicNames.set(topic, { name: ev.name, sig: ev.signature, role });
+            }
+          }
+        }
+      }
+
+      // Contract address → role name map
+      const addrRoles = new Map();
+      for (const [role, c] of Object.entries(this.config.contracts)) {
+        if (c?.address) addrRoles.set(c.address.toLowerCase(), role.toUpperCase());
+      }
+
+      for (const sub of subs) {
+        const statusDot = '{green-fg}\u25CF{/green-fg}';
+        const chain = chainName(sub.chainId);
+
+        // Resolve event name from topic
+        let eventLabel;
+        if (sub.isCron) {
+          eventLabel = `{magenta-fg}${sub.cronName}{/magenta-fg} {grey-fg}(cron){/grey-fg}`;
+        } else {
+          const known = topicNames.get(sub.topic0?.toLowerCase());
+          if (known) {
+            eventLabel = `{cyan-fg}${known.name}{/cyan-fg} {grey-fg}(${known.role}){/grey-fg}`;
+          } else {
+            eventLabel = `{grey-fg}${sub.topic0?.slice(0, 18)}...{/grey-fg}`;
+          }
+        }
+
+        // Resolve contract name
+        const contractRole = addrRoles.get(sub.contract?.toLowerCase());
+        const contractLabel = contractRole
+          ? `{yellow-fg}${sub.contract?.slice(0, 10)}...{/yellow-fg} {grey-fg}[${contractRole}]{/grey-fg}`
+          : sub.contract ? `{grey-fg}${sub.contract?.slice(0, 10)}...{/grey-fg}` : '{grey-fg}any{/grey-fg}';
+
+        lines.push(`  ${statusDot} ACTIVE  {white-fg}${chain.padEnd(14)}{/white-fg} ${eventLabel}`);
+        lines.push(`             contract: ${contractLabel}  topic_0: {grey-fg}${sub.topic0?.slice(0, 22)}...{/grey-fg}`);
+        lines.push('');
+      }
+    } else {
+      lines.push('  {red-fg}No subscriptions found for this RC{/red-fg}');
     }
 
     this.flowPanel.setContent(lines.join('\n'));
@@ -640,7 +699,7 @@ export class Dashboard {
   _renderStatusBar() {
     const logInfo = this.logger ? ` | log: ${this.logger.filePath}` : '';
     const filterInfo = this.filter ? ` | filter: ${this.filter}` : '';
-    const panelNames = ['Flows', 'Activity', 'Details'];
+    const panelNames = ['Flows+Subs', 'Activity', 'Details'];
     const focusInfo = ` [{bold}${panelNames[this._panelIdx]}{/bold}]`;
     this.statusBar.setContent(
       ' {bold}Tab{/bold}:Panel  {bold}\u2191\u2193{/bold}:Scroll  {bold}\u2190\u2192{/bold}:Node  {bold}t{/bold}:Trace  {bold}f{/bold}:Filter  {bold}d{/bold}:Diagnose  {bold}r{/bold}:Refresh  {bold}q{/bold}:Quit' + filterInfo + logInfo + focusInfo
