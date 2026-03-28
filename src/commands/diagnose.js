@@ -1,6 +1,7 @@
 // Diagnose command — run health checks on RC/CC setup without starting the monitor
 
 import chalk from 'chalk';
+import ora from 'ora';
 import { loadConfig, validateConfig } from '../lib/config.js';
 import { resolveRvmId, fetchSubscriptions, discoverCallbackPatterns } from '../analysis/subscription.js';
 import { analyzeContracts } from '../analysis/abi-parser.js';
@@ -471,7 +472,9 @@ export default async function diagnose() {
   console.log(`\n  ${chalk.bold('rc-debug diagnose')}`);
   console.log(chalk.grey('  ' + '\u2500'.repeat(50)));
 
+  const spinner = ora({ text: 'Running health checks...', prefixText: ' ', color: 'cyan' }).start();
   const results = await runAllChecks(config);
+  spinner.stop();
 
   // Print grouped with // section headers
   let currentGroup = null;

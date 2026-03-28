@@ -18,7 +18,7 @@ if (!command || command === '--help' || command === '-h') {
   rc-debug — Interactive debugger for Reactive Network flows
 
   Commands:
-    init              Interactive setup (or: init --rc 0x... for auto-discovery)
+    init              Interactive setup — specify contracts manually
     watch             Launch live TUI dashboard
     watch --log FILE  Log all traces to JSONL file
     diagnose          Run health checks (config, RPC, balance, debt, subs)
@@ -37,7 +37,7 @@ if (!command || command === '--help' || command === '-h') {
     --verbose         Show progress to stderr
 
   Examples:
-    rc-debug init --rc 0xABC...
+    rc-debug init
     rc-debug diagnose
     rc-debug watch --log traces.jsonl
     rc-debug assert --flow Greet --timeout 30 --json

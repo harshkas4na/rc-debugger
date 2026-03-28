@@ -7,6 +7,10 @@ import { chainName, chainExplorerTxUrl, rnChainId, SYSTEM_CONTRACTS } from '../l
 import { formatArgs } from '../lib/decoder.js';
 import { ethGetBalance, ethCall } from '../lib/rpc.js';
 
+// ─── Spinner frames for TUI ─────────────────────────────────────────────────
+
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 // ─── Theme constants ────────────────────────────────────────────────────────
 
 const THEME = {
@@ -38,6 +42,8 @@ export class Dashboard {
 
     // Live contract data (refreshed periodically)
     this._liveData = { rcBalance: null, rcDebt: null, ccBalance: null, subsStatus: null };
+    this._liveRefreshing = false;
+    this._spinnerTick = 0;
     this._refreshLiveData();
     this._liveInterval = setInterval(() => this._refreshLiveData(), 30000);
 
@@ -246,7 +252,13 @@ export class Dashboard {
 
   // ─── Live data refresh ────────────────────────────────────
 
+  _spinnerFrame() {
+    this._spinnerTick = (this._spinnerTick + 1) % SPINNER_FRAMES.length;
+    return SPINNER_FRAMES[this._spinnerTick];
+  }
+
   async _refreshLiveData() {
+    this._liveRefreshing = true;
     const rnCid = rnChainId(this.config.network);
     const rcAddr = this.config.contracts.rc?.address;
     const ccAddr = this.config.contracts.callback?.address;
@@ -278,6 +290,7 @@ export class Dashboard {
       total: subs.length,
     };
 
+    this._liveRefreshing = false;
     if (this.screen) { this._renderHeader(); this.screen.render(); }
   }
 
@@ -292,7 +305,8 @@ export class Dashboard {
     const rcHealthy = this.orchestrator.rcWatcher.healthy;
     const healthDot = rcHealthy ? '{green-fg}v{/green-fg}' : '{red-fg}x{/red-fg}';
 
-    const line1 = `  {bold}RC Debugger{/bold}  {grey-fg}|{/grey-fg}  ${net}  {grey-fg}|{/grey-fg}  RC: {white-fg}${rcShort}{/white-fg}  {grey-fg}|{/grey-fg}  ${flowCount} flow(s)  {grey-fg}|{/grey-fg}  ${active} active  {grey-fg}|{/grey-fg}  ${healthDot} ${this.config.pollInterval / 1000}s poll`;
+    const refreshIndicator = this._liveRefreshing ? `  {cyan-fg}${this._spinnerFrame()} refreshing...{/cyan-fg}` : '';
+    const line1 = `  {bold}RC Debugger{/bold}  {grey-fg}|{/grey-fg}  ${net}  {grey-fg}|{/grey-fg}  RC: {white-fg}${rcShort}{/white-fg}  {grey-fg}|{/grey-fg}  ${flowCount} flow(s)  {grey-fg}|{/grey-fg}  ${active} active  {grey-fg}|{/grey-fg}  ${healthDot} ${this.config.pollInterval / 1000}s poll${refreshIndicator}`;
 
     // Stats line
     let line2 = '';
@@ -312,7 +326,7 @@ export class Dashboard {
       parts.push(`{bold}RC:{/bold} {${c}-fg}${s} REACT{/${c}-fg}`);
     }
     if (ld.rcDebt !== null && ld.rcDebt > 0) {
-      parts.push(`{red-fg}DEBT: ${ld.rcDebt.toPrecision(3)} REACT{/red-fg}`);
+      parts.push(`{red-fg}{bold}!! DEBT: ${ld.rcDebt.toPrecision(3)} REACT{/bold} — callbacks blocked, subscriptions inactive{/red-fg}`);
     }
     if (ld.ccBalance !== null) {
       const b = ld.ccBalance;
@@ -357,6 +371,23 @@ export class Dashboard {
     lines.push('');
 
     if (subs.length > 0) {
+      // Check debt status to determine subscription health
+      const ld = this._liveData;
+      const rcInDebt = ld.rcDebt !== null && ld.rcDebt > 0;
+      const rcEmpty = ld.rcBalance !== null && ld.rcBalance <= 0;
+
+      // Debt warning banner
+      if (rcInDebt) {
+        lines.push('  {red-fg}{bold}!! RC IS IN DEBT — All subscriptions are effectively INACTIVE{/bold}{/red-fg}');
+        lines.push('  {red-fg}   Subscribers in debt are skipped by the Reactive Network.{/red-fg}');
+        lines.push('  {yellow-fg}   Fix: call coverDebt() or send REACT to the system contract to clear debt{/yellow-fg}');
+        lines.push('');
+      } else if (rcEmpty) {
+        lines.push('  {yellow-fg}{bold}! RC balance is 0 — Subscriptions will become inactive when debt accrues{/bold}{/yellow-fg}');
+        lines.push('  {yellow-fg}   Fund your RC with lREACT (testnet) or depositTo() (mainnet){/yellow-fg}');
+        lines.push('');
+      }
+
       // Build lookup maps
       const topicNames = new Map();
       const contracts = this.detection.contracts;
@@ -380,8 +411,12 @@ export class Dashboard {
       lines.push('');
 
       for (const sub of subs) {
-        // Status
-        const status = '{green-fg}v ACTIVE{/green-fg}';
+        // Status — show INACTIVE if RC in debt or balance is 0
+        const status = rcInDebt
+          ? '{red-fg}x INACTIVE{/red-fg}'
+          : rcEmpty
+            ? '{yellow-fg}! AT RISK{/yellow-fg} '
+            : '{green-fg}v ACTIVE{/green-fg} ';
 
         // Chain
         const chain = chainName(sub.chainId);
@@ -453,14 +488,14 @@ export class Dashboard {
       let status;
       if (inst.failed) status = '{red-fg}x FAIL{/red-fg}';
       else if (inst.completed) status = '{green-fg}v OK{/green-fg}  ';
-      else status = '{yellow-fg}. ..  {/yellow-fg}';
+      else status = `{yellow-fg}${this._spinnerFrame()} ...{/yellow-fg} `;
 
       const hops = inst.hops.length > 0 ? ` {magenta-fg}[${inst.hops.length} hop]{/magenta-fg}` : '';
       items.push(`  {grey-fg}${ts}{/grey-fg}  ${status}  {bold}{white-fg}${inst.flow.name}{/white-fg}{/bold}  ${nodeSymbols}${hops}  {grey-fg}${inst.duration}s{/grey-fg}`);
     }
 
     if (items.length === 0) {
-      items.push('  {grey-fg}Waiting for events... Trigger a transaction to see flows here.{/grey-fg}');
+      items.push(`  {cyan-fg}${this._spinnerFrame()}{/cyan-fg} {grey-fg}Waiting for events... Trigger a transaction to see flows here.{/grey-fg}`);
     }
 
     this.activityPanel.setItems(items);
@@ -500,7 +535,11 @@ export class Dashboard {
     lines.push('  {grey-fg}' + '\u2500'.repeat(64) + '{/grey-fg}');
 
     if (!node.data) {
-      lines.push('  {grey-fg}No data yet for this step.{/grey-fg}');
+      if (node.state === STATE.PROGRESS) {
+        lines.push(`  {cyan-fg}${this._spinnerFrame()} Processing...{/cyan-fg} {grey-fg}Waiting for data from chain...{/grey-fg}`);
+      } else {
+        lines.push('  {grey-fg}No data yet for this step.{/grey-fg}');
+      }
     } else {
       const data = node.data;
 
@@ -520,6 +559,20 @@ export class Dashboard {
       }
 
       if (nodeKey === 'rcWatch') {
+        if (data.error) {
+          // Failed at react() — show plain English context
+          lines.push(`  {red-fg}{bold}react() failed:{/bold} ${data.error}{/red-fg}`);
+          const ld = this._liveData;
+          if (ld.rcDebt > 0) {
+            lines.push('');
+            lines.push(`  {red-fg}{bold}!! RC is in debt (${ld.rcDebt.toPrecision(3)} REACT){/bold}{/red-fg}`);
+            lines.push('  {yellow-fg}   Debt causes the system to skip subscriptions — react() may not fire correctly{/yellow-fg}');
+          }
+          if (ld.rcBalance !== null && ld.rcBalance <= 0) {
+            lines.push('');
+            lines.push('  {yellow-fg}{bold}! RC balance is 0 REACT{/bold} — fund to prevent further failures{/yellow-fg}');
+          }
+        }
         lines.push(`  {bold}TX #:{/bold}    {white-fg}${data.txNumber}{/white-fg}`);
         if (data.hash) lines.push(`  {bold}Hash:{/bold}    {white-fg}${data.hash}{/white-fg}`);
         if (data.gasUsed && data.gasLimit) {
@@ -565,6 +618,26 @@ export class Dashboard {
         if (data.success !== undefined) {
           const st = data.success ? '{green-fg}v SUCCESS{/green-fg}' : '{red-fg}x FAILED{/red-fg}';
           lines.push(`  {bold}Status:{/bold}  ${st}`);
+          // Show plain English failure context
+          if (!data.success) {
+            const ld = this._liveData;
+            if (ld.rcDebt > 0) {
+              lines.push('');
+              lines.push(`  {red-fg}{bold}!! RC is in debt (${ld.rcDebt.toPrecision(3)} REACT){/bold} — this is likely why the callback failed{/red-fg}`);
+              lines.push('  {yellow-fg}   Clear debt with coverDebt() or send REACT to system contract{/yellow-fg}');
+            }
+            // Check for CallbackFailure in logs
+            if (data.logs?.some(l => l.name === 'CallbackFailure' || l.name?.includes('CallbackFailure'))) {
+              lines.push('');
+              lines.push('  {red-fg}{bold}CallbackFailure detected{/bold} — callback was delivered but CC reverted{/red-fg}');
+              lines.push('  {yellow-fg}   Likely causes: wrong _callbackSender, missing address first param, or CC logic error{/yellow-fg}');
+            }
+            if (data.logs?.some(l => l.name === 'PaymentFailure' || l.name?.includes('PaymentFailure'))) {
+              lines.push('');
+              lines.push('  {red-fg}{bold}PaymentFailure detected{/bold} — contract could not pay for callback gas{/red-fg}');
+              lines.push('  {yellow-fg}   The contract has been blacklisted. Fund it and call coverDebt() to restore{/yellow-fg}');
+            }
+          }
         }
         if (data.selfCallbackOnly || data.selfCallbackComplete) {
           lines.push('  {bold}Type:{/bold}    {magenta-fg}Self-callback{/magenta-fg} {grey-fg}(state persistence on RN){/grey-fg}');
@@ -588,6 +661,22 @@ export class Dashboard {
           }
         }
         if (data.error) lines.push(`  {red-fg}Error: ${data.error}{/red-fg}`);
+      }
+    }
+
+    // Show live system health context for failed flows
+    if (inst.failed) {
+      const ld2 = this._liveData;
+      if (ld2.rcDebt > 0 || (ld2.rcBalance !== null && ld2.rcBalance <= 0)) {
+        lines.push('');
+        lines.push('  {red-fg}{bold}// SYSTEM HEALTH{/bold}{/red-fg}');
+        if (ld2.rcDebt > 0) {
+          lines.push(`  {red-fg}RC DEBT: ${ld2.rcDebt.toPrecision(3)} REACT — subscriptions inactive, callbacks blocked{/red-fg}`);
+          lines.push('  {yellow-fg}Fix: call coverDebt() or send REACT to system contract (0x...fffFfF){/yellow-fg}');
+        }
+        if (ld2.rcBalance !== null && ld2.rcBalance <= 0) {
+          lines.push('  {yellow-fg}RC BALANCE: 0 REACT — fund RC to resume operations{/yellow-fg}');
+        }
       }
     }
 
@@ -669,6 +758,16 @@ export class Dashboard {
       for (const hop of inst.hops) {
         const ic = hop.type === 'self-delivered' ? '{green-fg}v{/green-fg}' : '{magenta-fg}\u25B6{/magenta-fg}';
         lines.push(`  ${ic} ${hop.type}: ${hop.fnName || hop.selector || ''}`);
+      }
+    }
+
+    if (inst.failed) {
+      const ld3 = this._liveData;
+      if (ld3.rcDebt > 0 || (ld3.rcBalance !== null && ld3.rcBalance <= 0)) {
+        lines.push('');
+        lines.push('  {red-fg}{bold}// SYSTEM HEALTH{/bold}{/red-fg}');
+        if (ld3.rcDebt > 0) lines.push(`  {red-fg}RC DEBT: ${ld3.rcDebt.toPrecision(3)} REACT — subscriptions inactive, callbacks blocked{/red-fg}`);
+        if (ld3.rcBalance !== null && ld3.rcBalance <= 0) lines.push('  {yellow-fg}RC BALANCE: 0 REACT — fund to resume{/yellow-fg}');
       }
     }
 

@@ -17,7 +17,9 @@ import { ethBlockNumber } from '../lib/rpc.js';
 import { rnChainId, chainName, isRnChainId } from '../lib/chains.js';
 import { decodeRevertReason } from '../lib/decoder.js';
 import { CRON_TOPICS } from '../analysis/subscription.js';
-import { diagnoseFailure } from './failure-hints.js';
+import { diagnoseFailure, hasCallbackFailure } from './failure-hints.js';
+import { ethGetBalance, ethCall } from '../lib/rpc.js';
+import { SYSTEM_CONTRACTS } from '../lib/chains.js';
 
 export class Orchestrator {
   constructor(config, detection) {
@@ -158,7 +160,7 @@ export class Orchestrator {
 
   // ─── Tier 1 Fix #3: RC revert reason decoded ────────────────────────
 
-  _processMatchedRcTx(instance, rcTx) {
+  async _processMatchedRcTx(instance, rcTx) {
     if (!rcTx.status) {
       // Decode RC revert reason from rData or logs
       let revertReason = 'RC transaction reverted';
@@ -175,7 +177,8 @@ export class Orchestrator {
         }
       }
 
-      const d1 = diagnoseFailure('rcWatch', revertReason, { config: this.config });
+      const ctx = await this._getDiagContext();
+      const d1 = diagnoseFailure('rcWatch', revertReason, ctx);
       instance.failHint = d1.hint;
       instance.setFailed('rcWatch', revertReason);
       this.tracker.complete(instance);
@@ -198,7 +201,8 @@ export class Orchestrator {
         instance.setDestExecuted({ success: true, observationOnly: true });
         this.tracker.complete(instance);
       } else {
-        const d2 = diagnoseFailure('callback', 'No callbacks or logs emitted by RC', { config: this.config });
+        const ctx2 = await this._getDiagContext();
+        const d2 = diagnoseFailure('callback', 'No callbacks or logs emitted by RC', ctx2);
         instance.failHint = d2.hint;
         instance.setFailed('callback', 'No callbacks or logs emitted by RC');
         this.tracker.complete(instance);
@@ -238,8 +242,9 @@ export class Orchestrator {
       } else {
         // Dest callback: watch for execution on dest chain
         hasDestCallback = true;
-        this._watchDestCallback(instance, cb).catch(err => {
-          const d3 = diagnoseFailure('dest', err.message, { chainId: cb.chainId, contract: cb.contract, gasLimit: cb.gasLimit, config: this.config });
+        this._watchDestCallback(instance, cb).catch(async (err) => {
+          const ctx = await this._getDiagContext({ chainId: cb.chainId, contract: cb.contract, gasLimit: cb.gasLimit });
+          const d3 = diagnoseFailure('dest', err.message, ctx);
           instance.failHint = d3.hint;
           instance.setFailed('dest', err.message);
           this.tracker.complete(instance);
@@ -260,7 +265,7 @@ export class Orchestrator {
 
   // ─── Self-callback continuation ──────────────────────────────────────
 
-  _processSelfCallbackContinuation(instance, rcTx) {
+  async _processSelfCallbackContinuation(instance, rcTx) {
     if (!rcTx.status) {
       let revertReason = 'Self-callback delivery failed';
       const rData = rcTx.raw?.rData;
@@ -268,7 +273,8 @@ export class Orchestrator {
         const decoded = decodeRevertReason(rData);
         if (decoded) revertReason = `Self-callback revert: ${decoded}`;
       }
-      const d4 = diagnoseFailure('dest', revertReason, { config: this.config });
+      const ctx = await this._getDiagContext();
+      const d4 = diagnoseFailure('dest', revertReason, ctx);
       instance.failHint = d4.hint;
       instance.setFailed('dest', revertReason);
       this.tracker.complete(instance);
@@ -303,8 +309,9 @@ export class Orchestrator {
         } else {
           // Finally a dest callback — watch for it
           hasMore = true;
-          this._watchDestCallback(instance, cb).catch(err => {
-            const d5 = diagnoseFailure('dest', err.message, { chainId: cb.chainId, contract: cb.contract, config: this.config });
+          this._watchDestCallback(instance, cb).catch(async (err) => {
+            const ctx = await this._getDiagContext({ chainId: cb.chainId, contract: cb.contract });
+            const d5 = diagnoseFailure('dest', err.message, ctx);
             instance.failHint = d5.hint;
             instance.setFailed('dest', err.message);
             this.tracker.complete(instance);
@@ -362,6 +369,36 @@ export class Orchestrator {
           if (!result.success) {
             result.revertReason = await getRevertReason(cb.chainId, result.txHash);
           }
+
+          // Check for CallbackFailure event in logs
+          const cbFailed = hasCallbackFailure(result.logs);
+          if (cbFailed && result.success) {
+            // Tx succeeded but CallbackFailure was emitted — the callback proxy caught the revert
+            const ctx = await this._getDiagContext({ chainId: cb.chainId, contract: cb.contract, gasLimit: cb.gasLimit });
+            const failMsg = 'CallbackFailure detected — callback was delivered but destination contract reverted';
+            const d = diagnoseFailure('dest', failMsg, ctx);
+            instance.failHint = d.hint;
+            instance.setDestExecuted({
+              success: false,
+              txHash: result.txHash,
+              blockNumber: result.blockNumber,
+              logs: result.logs,
+              gasUsed: result.gasUsed,
+              revertReason: failMsg,
+              chainId: cb.chainId,
+              chainName: chainName(cb.chainId),
+            });
+            this.tracker.complete(instance);
+            return;
+          }
+
+          if (!result.success) {
+            const ctx = await this._getDiagContext({ chainId: cb.chainId, contract: cb.contract, gasLimit: cb.gasLimit });
+            const failMsg = result.revertReason || 'Callback transaction reverted on destination chain';
+            const d = diagnoseFailure('dest', failMsg, ctx);
+            instance.failHint = d.hint;
+          }
+
           instance.setDestExecuted({
             success: result.success,
             txHash: result.txHash,
@@ -377,17 +414,47 @@ export class Orchestrator {
         }
       }
 
+      const ctx6 = await this._getDiagContext({ chainId: cb.chainId, contract: cb.contract, gasLimit: cb.gasLimit });
       const timeoutMsg = `Callback not found on ${chainName(cb.chainId)} (~${Math.round(maxAttempts * pollMs / 1000)}s timeout)`;
-      const d6 = diagnoseFailure('dest', timeoutMsg, { chainId: cb.chainId, contract: cb.contract, gasLimit: cb.gasLimit, config: this.config });
+      const d6 = diagnoseFailure('dest', timeoutMsg, ctx6);
       instance.failHint = d6.hint;
       instance.setFailed('dest', timeoutMsg);
       this.tracker.complete(instance);
     } catch (err) {
-      const d7 = diagnoseFailure('dest', err.message, { chainId: cb.chainId, contract: cb.contract, config: this.config });
+      const ctx7 = await this._getDiagContext({ chainId: cb.chainId, contract: cb.contract });
+      const d7 = diagnoseFailure('dest', err.message, ctx7);
       instance.failHint = d7.hint;
       instance.setFailed('dest', err.message);
       this.tracker.complete(instance);
     }
+  }
+
+  async _getDiagContext(extra = {}) {
+    const ctx = { config: this.config, ...extra };
+    const rnCid = rnChainId(this.config.network);
+    const rcAddr = this.config.contracts.rc?.address;
+    const ccAddr = this.config.contracts.callback?.address;
+    const ccChainId = this.config.contracts.callback?.chainId;
+
+    try {
+      if (rcAddr) {
+        const balHex = await ethGetBalance(rnCid, rcAddr);
+        ctx.rcBalance = Number(BigInt(balHex || '0x0')) / 1e18;
+        const paddedAddr = rcAddr.slice(2).toLowerCase().padStart(64, '0');
+        const data = '0x2ecd4e7d' + paddedAddr;
+        const result = await ethCall(rnCid, { to: SYSTEM_CONTRACTS.callbackProxy, data }, 'latest');
+        ctx.rcDebt = Number(BigInt(result || '0x0')) / 1e18;
+      }
+    } catch {}
+
+    try {
+      if (ccAddr && ccChainId) {
+        const balHex = await ethGetBalance(ccChainId, ccAddr);
+        ctx.ccBalance = Number(BigInt(balHex || '0x0')) / 1e18;
+      }
+    } catch {}
+
+    return ctx;
   }
 
   _matchFlowByTrigger(topic0, chainId) {

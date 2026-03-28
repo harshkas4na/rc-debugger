@@ -2,6 +2,7 @@
 // Supports:
 //   --log <file>  JSON trace persistence (JSONL)
 
+import ora from 'ora';
 import { loadConfig, validateConfig } from '../lib/config.js';
 import { detectFlows } from '../analysis/flow-detector.js';
 import { Orchestrator } from '../monitor/orchestrator.js';
@@ -30,12 +31,14 @@ export default async function watch(args) {
   // Parse flags
   const logFile = getFlag(args, '--log');
 
-  console.log('\n  \x1b[1mRC Debugger\x1b[0m \u2014 Pre-flight checks...\n');
+  console.log('\n  \x1b[1mRC Debugger\x1b[0m\n');
 
   // ─── Pre-flight diagnostics ──────────────────────────────
+  const preflightSpinner = ora({ text: 'Running pre-flight checks...', prefixText: ' ', color: 'cyan' }).start();
   try {
     const checks = await quickDiagnose(config);
     let hasBlocker = false;
+    preflightSpinner.succeed('Pre-flight checks complete');
     for (const r of checks) {
       const sym = r.status === 'pass' ? '\x1b[32mv\x1b[0m' :
                   r.status === 'warn' ? '\x1b[33m!\x1b[0m' :
@@ -49,18 +52,19 @@ export default async function watch(args) {
       console.log('  Starting anyway...\n');
     }
   } catch {
-    // Pre-flight is best-effort — don't block on failure
+    preflightSpinner.warn('Pre-flight checks skipped');
   }
 
-  console.log('  \x1b[90mAnalyzing flows...\x1b[0m\n');
+  const flowSpinner = ora({ text: 'Analyzing flows...', prefixText: ' ', color: 'cyan' }).start();
 
   let detection;
   try {
     detection = await detectFlows(config, (msg) => {
-      process.stdout.write(`  \x1b[90m\u25B6 ${msg}\x1b[0m\n`);
+      flowSpinner.text = msg;
     });
+    flowSpinner.succeed(`Detected ${detection.flows.length} flow(s)`);
   } catch (err) {
-    console.error(`\n  \x1b[31mFailed to detect flows: ${err.message}\x1b[0m`);
+    flowSpinner.fail(`Failed to detect flows: ${err.message}`);
     process.exit(1);
   }
 
